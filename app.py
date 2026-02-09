@@ -4,27 +4,28 @@ import pandas as pd
 import numpy as np
 import ta
 from xgboost import XGBClassifier
-from sklearn.preprocessing import StandardScaler
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Indian AI Market Dashboard", layout="centered")
 
 st.title("📊 Indian AI Market Dashboard")
-st.caption("Advanced AI Model + Interactive Charts")
+st.caption("Daily + Weekly AI Signals with 7-Day Projection")
 
 # -------------------------------------------------
-# DATA + MODEL FUNCTION (CLOUD SAFE)
+# DATA + MODEL FUNCTION
 # -------------------------------------------------
 @st.cache_data
 def generate_signal(symbol):
 
-    data = yf.download(symbol, start="2013-01-01", auto_adjust=True)
+    data = yf.download(symbol, start="2015-01-01", auto_adjust=True)
 
-    # Fix MultiIndex issue (Cloud fix)
+    if data.empty:
+        return None
+
+    # Fix MultiIndex issue
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
 
-    # Keep only required columns
     data = data[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
     data = data.apply(pd.to_numeric, errors='coerce')
     data.dropna(inplace=True)
@@ -36,7 +37,11 @@ def generate_signal(symbol):
     data['Return'] = data['Close'].pct_change()
     data['Volatility'] = data['Return'].rolling(5).std()
 
+    data.replace([np.inf, -np.inf], np.nan, inplace=True)
     data.dropna(inplace=True)
+
+    if len(data) < 200:
+        return None
 
     # Targets
     data['Target_1D'] = (data['Close'].shift(-1) > data['Close']).astype(int)
@@ -52,12 +57,11 @@ def generate_signal(symbol):
 
     split = int(len(data) * 0.8)
 
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X[:split])
-    X_latest = scaler.transform(X.iloc[-1:])
+    X_train = X.iloc[:split]
+    X_latest = X.iloc[[-1]]
 
     model1 = XGBClassifier(
-        n_estimators=150,
+        n_estimators=120,
         max_depth=3,
         learning_rate=0.05,
         subsample=0.8,
@@ -66,7 +70,7 @@ def generate_signal(symbol):
     )
 
     model5 = XGBClassifier(
-        n_estimators=150,
+        n_estimators=120,
         max_depth=3,
         learning_rate=0.05,
         subsample=0.8,
@@ -74,8 +78,8 @@ def generate_signal(symbol):
         eval_metric="logloss"
     )
 
-    model1.fit(X_train, y1[:split])
-    model5.fit(X_train, y5[:split])
+    model1.fit(X_train, y1.iloc[:split])
+    model5.fit(X_train, y5.iloc[:split])
 
     prob1 = model1.predict_proba(X_latest)[0][1]
     prob5 = model5.predict_proba(X_latest)[0][1]
@@ -96,19 +100,41 @@ def generate_signal(symbol):
 
 
 # -------------------------------------------------
+# 7 DAY FORECAST FUNCTION
+# -------------------------------------------------
+def forecast_7_days(data, prob):
+
+    last_price = float(data['Close'].iloc[-1])
+    avg_vol = data['Return'].std()
+
+    bias = (prob - 0.5) * 2  # -1 to +1 range
+
+    projected_prices = []
+    price = last_price
+
+    for _ in range(7):
+        expected_move = bias * avg_vol
+        price = price * (1 + expected_move)
+        projected_prices.append(price)
+
+    return projected_prices
+
+
+# -------------------------------------------------
 # CHART FUNCTION
 # -------------------------------------------------
-def plot_chart(data, name):
+def plot_chart(data, name, projection):
 
     recent = data.tail(120)
+    last_date = recent.index[-1]
 
     fig = go.Figure()
 
+    # Historical
     fig.add_trace(go.Scatter(
         x=recent.index,
         y=recent['Close'],
-        name="Close",
-        line=dict(width=2)
+        name="Close"
     ))
 
     fig.add_trace(go.Scatter(
@@ -123,9 +149,19 @@ def plot_chart(data, name):
         name="MA50"
     ))
 
+    # Projection
+    future_dates = pd.date_range(start=last_date, periods=8, freq='B')[1:]
+
+    fig.add_trace(go.Scatter(
+        x=future_dates,
+        y=projection,
+        name="7-Day Projection",
+        line=dict(dash="dash")
+    ))
+
     fig.update_layout(
         template="plotly_dark",
-        height=400,
+        height=450,
         margin=dict(l=10, r=10, t=30, b=10),
         title=name
     )
@@ -146,7 +182,15 @@ bullish_count = 0
 
 for name, symbol in assets.items():
 
-    data, price, pct, daily, prob1, weekly, prob5 = generate_signal(symbol)
+    result = generate_signal(symbol)
+
+    if result is None:
+        st.warning(f"Not enough data for {name}")
+        continue
+
+    data, price, pct, daily, prob1, weekly, prob5 = result
+
+    projection = forecast_7_days(data, prob1)
 
     if weekly == "BULLISH":
         bullish_count += 1
@@ -168,7 +212,7 @@ for name, symbol in assets.items():
         st.write("📅 Weekly Outlook:", weekly)
         st.progress(float(prob5))
 
-    plot_chart(data, name)
+    plot_chart(data, name, projection)
 
     st.divider()
 
@@ -179,13 +223,8 @@ for name, symbol in assets.items():
 st.header("📈 Overall Market Sentiment")
 
 if bullish_count >= 2:
-    sentiment = "BULLISH"
-    color = "green"
+    st.markdown("<h2 style='color:green;'>BULLISH</h2>", unsafe_allow_html=True)
 elif bullish_count == 1:
-    sentiment = "NEUTRAL"
-    color = "orange"
+    st.markdown("<h2 style='color:orange;'>NEUTRAL</h2>", unsafe_allow_html=True)
 else:
-    sentiment = "BEARISH"
-    color = "red"
-
-st.markdown(f"<h2 style='color:{color};'>{sentiment}</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='color:red;'>BEARISH</h2>", unsafe_allow_html=True)
