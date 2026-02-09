@@ -6,61 +6,76 @@ import ta
 from xgboost import XGBClassifier
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Indian AI Market Dashboard", layout="centered")
+st.set_page_config(page_title="Indian AI Market Dashboard", layout="wide")
+
+# -----------------------------
+# CUSTOM DARK CSS
+# -----------------------------
+st.markdown("""
+<style>
+body {
+    background-color: #0e1117;
+}
+.card {
+    background-color: #1c1f26;
+    padding: 20px;
+    border-radius: 15px;
+    margin-bottom: 20px;
+}
+.price {
+    font-size: 32px;
+    font-weight: bold;
+}
+.green { color: #00ff88; }
+.red { color: #ff4b4b; }
+.badge {
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-weight: bold;
+    display: inline-block;
+}
+.bull { background-color: #003d2e; color: #00ff88; }
+.bear { background-color: #3d0000; color: #ff4b4b; }
+.neutral { background-color: #333333; color: #cccccc; }
+</style>
+""", unsafe_allow_html=True)
 
 st.title("📊 Indian AI Market Dashboard")
-st.caption("Daily + Weekly AI Signals with 7-Day Projection")
 
-# -------------------------------------------------
-# DATA + MODEL FUNCTION
-# -------------------------------------------------
+# -----------------------------
+# MODEL FUNCTION
+# -----------------------------
 @st.cache_data
 def generate_signal(symbol):
 
-    data = yf.download(symbol, start="2015-01-01", auto_adjust=True)
+    data = yf.download(symbol, start="2016-01-01", auto_adjust=True)
 
-    if data.empty:
-        return None
-
-    # Fix MultiIndex issue
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
 
-    data = data[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+    data = data[['Open','High','Low','Close','Volume']]
     data = data.apply(pd.to_numeric, errors='coerce')
     data.dropna(inplace=True)
 
-    # Indicators
     data['MA20'] = data['Close'].rolling(20).mean()
     data['MA50'] = data['Close'].rolling(50).mean()
-    data['RSI'] = ta.momentum.RSIIndicator(close=data['Close'], window=14).rsi()
+    data['RSI'] = ta.momentum.RSIIndicator(data['Close'], window=14).rsi()
     data['Return'] = data['Close'].pct_change()
-    data['Volatility'] = data['Return'].rolling(5).std()
-
-    data.replace([np.inf, -np.inf], np.nan, inplace=True)
     data.dropna(inplace=True)
 
     if len(data) < 200:
         return None
 
-    # Targets
-    data['Target_1D'] = (data['Close'].shift(-1) > data['Close']).astype(int)
-    data['Target_5D'] = (data['Close'].shift(-5) > data['Close']).astype(int)
-
+    data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
     data.dropna(inplace=True)
 
-    features = ['MA20','MA50','RSI','Return','Volatility']
-
+    features = ['MA20','MA50','RSI','Return']
     X = data[features]
-    y1 = data['Target_1D']
-    y5 = data['Target_5D']
+    y = data['Target']
 
     split = int(len(data) * 0.8)
 
-    X_train = X.iloc[:split]
-    X_latest = X.iloc[[-1]]
-
-    model1 = XGBClassifier(
+    model = XGBClassifier(
         n_estimators=120,
         max_depth=3,
         learning_rate=0.05,
@@ -69,72 +84,40 @@ def generate_signal(symbol):
         eval_metric="logloss"
     )
 
-    model5 = XGBClassifier(
-        n_estimators=120,
-        max_depth=3,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        eval_metric="logloss"
-    )
+    model.fit(X.iloc[:split], y.iloc[:split])
 
-    model1.fit(X_train, y1.iloc[:split])
-    model5.fit(X_train, y5.iloc[:split])
-
-    prob1 = model1.predict_proba(X_latest)[0][1]
-    prob5 = model5.predict_proba(X_latest)[0][1]
+    prob = model.predict_proba(X.iloc[[-1]])[0][1]
 
     price = float(data['Close'].iloc[-1])
     prev = float(data['Close'].iloc[-2])
     pct = ((price - prev) / prev) * 100
 
-    def signal(prob):
-        if prob > 0.60:
-            return "BULLISH"
-        elif prob < 0.40:
-            return "BEARISH"
-        else:
-            return "NEUTRAL"
+    if prob > 0.6:
+        signal = "BULLISH"
+    elif prob < 0.4:
+        signal = "BEARISH"
+    else:
+        signal = "NEUTRAL"
 
-    return data, price, pct, signal(prob1), prob1, signal(prob5), prob5
-
-
-# -------------------------------------------------
-# 7 DAY FORECAST FUNCTION
-# -------------------------------------------------
-def forecast_7_days(data, prob):
-
-    last_price = float(data['Close'].iloc[-1])
-    avg_vol = data['Return'].std()
-
-    bias = (prob - 0.5) * 2  # -1 to +1 range
-
-    projected_prices = []
-    price = last_price
-
-    for _ in range(7):
-        expected_move = bias * avg_vol
-        price = price * (1 + expected_move)
-        projected_prices.append(price)
-
-    return projected_prices
+    return data, price, pct, signal, prob
 
 
-# -------------------------------------------------
-# CHART FUNCTION
-# -------------------------------------------------
-def plot_chart(data, name, projection):
+# -----------------------------
+# CANDLESTICK CHART
+# -----------------------------
+def plot_chart(data, name):
 
-    recent = data.tail(120)
-    last_date = recent.index[-1]
+    recent = data.tail(100)
 
     fig = go.Figure()
 
-    # Historical
-    fig.add_trace(go.Scatter(
+    fig.add_trace(go.Candlestick(
         x=recent.index,
-        y=recent['Close'],
-        name="Close"
+        open=recent['Open'],
+        high=recent['High'],
+        low=recent['Low'],
+        close=recent['Close'],
+        name="Price"
     ))
 
     fig.add_trace(go.Scatter(
@@ -149,36 +132,25 @@ def plot_chart(data, name, projection):
         name="MA50"
     ))
 
-    # Projection
-    future_dates = pd.date_range(start=last_date, periods=8, freq='B')[1:]
-
-    fig.add_trace(go.Scatter(
-        x=future_dates,
-        y=projection,
-        name="7-Day Projection",
-        line=dict(dash="dash")
-    ))
-
     fig.update_layout(
         template="plotly_dark",
-        height=450,
-        margin=dict(l=10, r=10, t=30, b=10),
-        title=name
+        height=500,
+        xaxis_rangeslider_visible=False
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
 
-# -------------------------------------------------
+# -----------------------------
 # ASSETS
-# -------------------------------------------------
+# -----------------------------
 assets = {
     "NIFTY 50": "^NSEI",
     "Gold ETF": "GOLDBEES.NS",
     "Silver ETF": "SILVERBEES.NS"
 }
 
-bullish_count = 0
+overall_score = 0
 
 for name, symbol in assets.items():
 
@@ -188,43 +160,44 @@ for name, symbol in assets.items():
         st.warning(f"Not enough data for {name}")
         continue
 
-    data, price, pct, daily, prob1, weekly, prob5 = result
+    data, price, pct, signal, prob = result
 
-    projection = forecast_7_days(data, prob1)
-
-    if weekly == "BULLISH":
-        bullish_count += 1
+    if signal == "BULLISH":
+        overall_score += 1
+    elif signal == "BEARISH":
+        overall_score -= 1
 
     color = "green" if pct > 0 else "red"
     arrow = "▲" if pct > 0 else "▼"
 
-    st.subheader(name)
-    st.markdown(f"### ₹ {price:.2f}")
-    st.markdown(f"<h4 style='color:{color};'>{arrow} {pct:.2f}%</h4>", unsafe_allow_html=True)
+    badge_class = "bull" if signal=="BULLISH" else "bear" if signal=="BEARISH" else "neutral"
 
-    col1, col2 = st.columns(2)
+    st.markdown(f"""
+    <div class="card">
+        <h3>{name}</h3>
+        <div class="price">₹ {price:.2f}</div>
+        <div class="{color}">{arrow} {pct:.2f}%</div>
+        <div class="badge {badge_class}">{signal}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    with col1:
-        st.write("📊 Daily Outlook:", daily)
-        st.progress(float(prob1))
+    st.progress(float(prob))
 
-    with col2:
-        st.write("📅 Weekly Outlook:", weekly)
-        st.progress(float(prob5))
+    plot_chart(data, name)
 
-    plot_chart(data, name, projection)
-
-    st.divider()
-
-
-# -------------------------------------------------
+# -----------------------------
 # OVERALL SENTIMENT
-# -------------------------------------------------
-st.header("📈 Overall Market Sentiment")
+# -----------------------------
+st.markdown("---")
 
-if bullish_count >= 2:
-    st.markdown("<h2 style='color:green;'>BULLISH</h2>", unsafe_allow_html=True)
-elif bullish_count == 1:
-    st.markdown("<h2 style='color:orange;'>NEUTRAL</h2>", unsafe_allow_html=True)
+if overall_score > 0:
+    sentiment = "BULLISH MARKET"
+    style = "green"
+elif overall_score < 0:
+    sentiment = "BEARISH MARKET"
+    style = "red"
 else:
-    st.markdown("<h2 style='color:red;'>BEARISH</h2>", unsafe_allow_html=True)
+    sentiment = "NEUTRAL MARKET"
+    style = "neutral"
+
+st.markdown(f"<h2 class='{style}'>{sentiment}</h2>", unsafe_allow_html=True)
