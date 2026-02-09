@@ -6,45 +6,74 @@ import ta
 from xgboost import XGBClassifier
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Indian AI Market Dashboard", layout="wide")
+st.set_page_config(page_title="Indian AI Market", layout="wide")
 
-# -----------------------------
-# CUSTOM DARK CSS
-# -----------------------------
+# -------------------------
+# PREMIUM CSS
+# -------------------------
 st.markdown("""
 <style>
 body {
-    background-color: #0e1117;
+    background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
 }
-.card {
-    background-color: #1c1f26;
-    padding: 20px;
-    border-radius: 15px;
+
+.main-card {
+    background: rgba(255,255,255,0.05);
+    padding: 25px;
+    border-radius: 20px;
+    backdrop-filter: blur(10px);
     margin-bottom: 20px;
 }
+
+.asset-card {
+    background: rgba(255,255,255,0.07);
+    padding: 20px;
+    border-radius: 18px;
+    text-align: center;
+}
+
 .price {
-    font-size: 32px;
+    font-size: 34px;
     font-weight: bold;
 }
-.green { color: #00ff88; }
-.red { color: #ff4b4b; }
-.badge {
-    padding: 6px 12px;
-    border-radius: 20px;
-    font-weight: bold;
+
+.up { color: #00ff9d; }
+.down { color: #ff4b4b; }
+
+.signal-bull {
+    background: rgba(0,255,157,0.2);
+    color: #00ff9d;
+    padding: 6px 14px;
+    border-radius: 25px;
     display: inline-block;
+    margin-top: 10px;
 }
-.bull { background-color: #003d2e; color: #00ff88; }
-.bear { background-color: #3d0000; color: #ff4b4b; }
-.neutral { background-color: #333333; color: #cccccc; }
+
+.signal-bear {
+    background: rgba(255,75,75,0.2);
+    color: #ff4b4b;
+    padding: 6px 14px;
+    border-radius: 25px;
+    display: inline-block;
+    margin-top: 10px;
+}
+
+.signal-neutral {
+    background: rgba(200,200,200,0.2);
+    color: #dddddd;
+    padding: 6px 14px;
+    border-radius: 25px;
+    display: inline-block;
+    margin-top: 10px;
+}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📊 Indian AI Market Dashboard")
 
-# -----------------------------
-# MODEL FUNCTION
-# -----------------------------
+# -------------------------
+# MODEL
+# -------------------------
 @st.cache_data
 def generate_signal(symbol):
 
@@ -69,8 +98,7 @@ def generate_signal(symbol):
     data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
     data.dropna(inplace=True)
 
-    features = ['MA20','MA50','RSI','Return']
-    X = data[features]
+    X = data[['MA20','MA50','RSI','Return']]
     y = data['Target']
 
     split = int(len(data) * 0.8)
@@ -102,102 +130,91 @@ def generate_signal(symbol):
     return data, price, pct, signal, prob
 
 
-# -----------------------------
-# CANDLESTICK CHART
-# -----------------------------
-def plot_chart(data, name):
-
-    recent = data.tail(100)
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Candlestick(
-        x=recent.index,
-        open=recent['Open'],
-        high=recent['High'],
-        low=recent['Low'],
-        close=recent['Close'],
-        name="Price"
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=recent.index,
-        y=recent['MA20'],
-        name="MA20"
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=recent.index,
-        y=recent['MA50'],
-        name="MA50"
-    ))
-
-    fig.update_layout(
-        template="plotly_dark",
-        height=500,
-        xaxis_rangeslider_visible=False
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-
-# -----------------------------
+# -------------------------
 # ASSETS
-# -----------------------------
+# -------------------------
 assets = {
     "NIFTY 50": "^NSEI",
     "Gold ETF": "GOLDBEES.NS",
     "Silver ETF": "SILVERBEES.NS"
 }
 
-overall_score = 0
+col1, col2, col3 = st.columns(3)
 
-for name, symbol in assets.items():
+columns = [col1, col2, col3]
+
+overall = 0
+
+for i, (name, symbol) in enumerate(assets.items()):
 
     result = generate_signal(symbol)
-
     if result is None:
-        st.warning(f"Not enough data for {name}")
         continue
 
     data, price, pct, signal, prob = result
 
     if signal == "BULLISH":
-        overall_score += 1
+        overall += 1
     elif signal == "BEARISH":
-        overall_score -= 1
+        overall -= 1
 
-    color = "green" if pct > 0 else "red"
     arrow = "▲" if pct > 0 else "▼"
+    color = "up" if pct > 0 else "down"
 
-    badge_class = "bull" if signal=="BULLISH" else "bear" if signal=="BEARISH" else "neutral"
+    badge_class = "signal-bull" if signal=="BULLISH" else \
+                  "signal-bear" if signal=="BEARISH" else \
+                  "signal-neutral"
 
-    st.markdown(f"""
-    <div class="card">
-        <h3>{name}</h3>
-        <div class="price">₹ {price:.2f}</div>
-        <div class="{color}">{arrow} {pct:.2f}%</div>
-        <div class="badge {badge_class}">{signal}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    with columns[i]:
+        st.markdown(f"""
+        <div class="asset-card">
+            <h3>{name}</h3>
+            <div class="price">₹ {price:.2f}</div>
+            <div class="{color}">{arrow} {pct:.2f}%</div>
+            <div class="{badge_class}">{signal}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.progress(float(prob))
 
-    plot_chart(data, name)
+# -------------------------
+# OVERALL SENTIMENT BANNER
+# -------------------------
+st.markdown("<br>", unsafe_allow_html=True)
 
-# -----------------------------
-# OVERALL SENTIMENT
-# -----------------------------
-st.markdown("---")
-
-if overall_score > 0:
-    sentiment = "BULLISH MARKET"
-    style = "green"
-elif overall_score < 0:
-    sentiment = "BEARISH MARKET"
-    style = "red"
+if overall > 0:
+    sentiment = "🚀 MARKET BULLISH"
+elif overall < 0:
+    sentiment = "⚠ MARKET BEARISH"
 else:
-    sentiment = "NEUTRAL MARKET"
-    style = "neutral"
+    sentiment = "⚖ MARKET NEUTRAL"
 
-st.markdown(f"<h2 class='{style}'>{sentiment}</h2>", unsafe_allow_html=True)
+st.markdown(f"""
+<div class="main-card">
+    <h2 style="text-align:center;">{sentiment}</h2>
+</div>
+""", unsafe_allow_html=True)
+
+
+# -------------------------
+# CHART SECTION
+# -------------------------
+st.subheader("Market Chart")
+
+data = yf.download("^NSEI", period="6mo", auto_adjust=True)
+
+fig = go.Figure()
+fig.add_trace(go.Candlestick(
+    x=data.index,
+    open=data['Open'],
+    high=data['High'],
+    low=data['Low'],
+    close=data['Close']
+))
+
+fig.update_layout(
+    template="plotly_dark",
+    height=500,
+    xaxis_rangeslider_visible=False
+)
+
+st.plotly_chart(fig, use_container_width=True)
