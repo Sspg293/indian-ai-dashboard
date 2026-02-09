@@ -1,3 +1,4 @@
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -12,33 +13,18 @@ st.set_page_config(page_title="Indian AI Market Dashboard", layout="centered")
 st.title("📊 Indian AI Market Dashboard")
 st.caption("Advanced AI Model + Interactive Charts")
 
-# -------------------------------------------------
-# DATA + MODEL FUNCTION (CLOUD SAFE)
-# -------------------------------------------------
-@st.cache_data
 def generate_signal(symbol):
 
-    data = yf.download(symbol, start="2013-01-01", auto_adjust=True)
+    data = yf.download(symbol, start="2013-01-01")
 
-    # Fix MultiIndex issue (Cloud fix)
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-
-    # Keep only required columns
-    data = data[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
-    data = data.apply(pd.to_numeric, errors='coerce')
-    data.dropna(inplace=True)
-
-    # Indicators
     data['MA20'] = data['Close'].rolling(20).mean()
     data['MA50'] = data['Close'].rolling(50).mean()
-    data['RSI'] = ta.momentum.RSIIndicator(close=data['Close'], window=14).rsi()
+    data['RSI'] = ta.momentum.RSIIndicator(data['Close'], window=14).rsi()
     data['Return'] = data['Close'].pct_change()
     data['Volatility'] = data['Return'].rolling(5).std()
 
     data.dropna(inplace=True)
 
-    # Targets
     data['Target_1D'] = (data['Close'].shift(-1) > data['Close']).astype(int)
     data['Target_5D'] = (data['Close'].shift(-5) > data['Close']).astype(int)
 
@@ -80,8 +66,8 @@ def generate_signal(symbol):
     prob1 = model1.predict_proba(X_latest)[0][1]
     prob5 = model5.predict_proba(X_latest)[0][1]
 
-    price = float(data['Close'].iloc[-1])
-    prev = float(data['Close'].iloc[-2])
+    price = data['Close'].iloc[-1]
+    prev = data['Close'].iloc[-2]
     pct = ((price - prev) / prev) * 100
 
     def signal(prob):
@@ -95,9 +81,6 @@ def generate_signal(symbol):
     return data, price, pct, signal(prob1), prob1, signal(prob5), prob5
 
 
-# -------------------------------------------------
-# CHART FUNCTION
-# -------------------------------------------------
 def plot_chart(data, name):
 
     recent = data.tail(120)
@@ -107,8 +90,7 @@ def plot_chart(data, name):
     fig.add_trace(go.Scatter(
         x=recent.index,
         y=recent['Close'],
-        name="Close",
-        line=dict(width=2)
+        name="Close"
     ))
 
     fig.add_trace(go.Scatter(
@@ -126,16 +108,12 @@ def plot_chart(data, name):
     fig.update_layout(
         template="plotly_dark",
         height=400,
-        margin=dict(l=10, r=10, t=30, b=10),
         title=name
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
 
-# -------------------------------------------------
-# ASSETS
-# -------------------------------------------------
 assets = {
     "NIFTY 50": "^NSEI",
     "Gold ETF": "GOLDBEES.NS",
@@ -172,10 +150,6 @@ for name, symbol in assets.items():
 
     st.divider()
 
-
-# -------------------------------------------------
-# OVERALL SENTIMENT
-# -------------------------------------------------
 st.header("📈 Overall Market Sentiment")
 
 if bullish_count >= 2:
