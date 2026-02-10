@@ -13,19 +13,24 @@ import pytz
 st.set_page_config(page_title="Indian AI Market Dashboard", layout="centered")
 
 st.title("📊 Indian AI Market Dashboard")
-st.caption("Multi-Asset AI | Daily + Weekly | 7-Day Projection")
+st.caption("Multi-Asset AI | 3:02 PM IST Auto Refresh")
 
-# Auto refresh every 10 minutes
-st_autorefresh(interval=600000, key="refresh")
+st_autorefresh(interval=60000, key="refresh")
 
-def is_after_market_close():
+def get_today_refresh_key():
     ist = pytz.timezone("Asia/Kolkata")
     now = datetime.datetime.now(ist)
-    market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
-    return now >= market_close
+    refresh_time = now.replace(hour=15, minute=2, second=0, microsecond=0)
+    if now < refresh_time:
+        refresh_date = (now - datetime.timedelta(days=1)).date()
+    else:
+        refresh_date = now.date()
+    return str(refresh_date)
 
-@st.cache_data(ttl=86400 if is_after_market_close() else 600)
-def generate_signal(symbol):
+refresh_key = get_today_refresh_key()
+
+@st.cache_data
+def generate_signal(symbol, refresh_key):
 
     data = yf.download(symbol, start="2015-01-01", auto_adjust=True)
 
@@ -66,23 +71,11 @@ def generate_signal(symbol):
     X_train = X.iloc[:split]
     X_latest = X.iloc[[-1]]
 
-    model1 = XGBClassifier(
-        n_estimators=120,
-        max_depth=3,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        eval_metric="logloss"
-    )
+    model1 = XGBClassifier(n_estimators=120, max_depth=3, learning_rate=0.05,
+                           subsample=0.8, colsample_bytree=0.8, eval_metric="logloss")
 
-    model5 = XGBClassifier(
-        n_estimators=120,
-        max_depth=3,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        eval_metric="logloss"
-    )
+    model5 = XGBClassifier(n_estimators=120, max_depth=3, learning_rate=0.05,
+                           subsample=0.8, colsample_bytree=0.8, eval_metric="logloss")
 
     model1.fit(X_train, y1.iloc[:split])
     model5.fit(X_train, y5.iloc[:split])
@@ -108,39 +101,25 @@ def forecast_7_days(data, prob):
     last_price = float(data['Close'].iloc[-1])
     avg_vol = data['Return'].std()
     bias = (prob - 0.5) * 2
-
     projected_prices = []
     price = last_price
-
     for _ in range(7):
         expected_move = bias * avg_vol
         price = price * (1 + expected_move)
         projected_prices.append(price)
-
     return projected_prices
 
 def plot_chart(data, name, projection):
-
     recent = data.tail(120)
     last_date = recent.index[-1]
-
     fig = go.Figure()
-
     fig.add_trace(go.Scatter(x=recent.index, y=recent['Close'], name="Close"))
     fig.add_trace(go.Scatter(x=recent.index, y=recent['MA20'], name="MA20"))
     fig.add_trace(go.Scatter(x=recent.index, y=recent['MA50'], name="MA50"))
-
     future_dates = pd.date_range(start=last_date, periods=8, freq='B')[1:]
-
-    fig.add_trace(go.Scatter(
-        x=future_dates,
-        y=projection,
-        name="7-Day Projection",
-        line=dict(dash="dash")
-    ))
-
+    fig.add_trace(go.Scatter(x=future_dates, y=projection,
+                             name="7-Day Projection", line=dict(dash="dash")))
     fig.update_layout(template="plotly_dark", height=450, title=name)
-
     st.plotly_chart(fig, use_container_width=True)
 
 assets = {
@@ -148,45 +127,33 @@ assets = {
     "Tata Gold ETF": "TATAGOLD.NS",
     "Tata Silver ETF": "TATSILV.NS"
 }
-
 bullish_count = 0
 
 for name, symbol in assets.items():
-
-    result = generate_signal(symbol)
-
+    result = generate_signal(symbol, refresh_key)
     if result is None:
         st.warning(f"Not enough data for {name}")
         continue
-
     data, price, pct, daily, prob1, weekly, prob5 = result
     projection = forecast_7_days(data, prob1)
-
     if weekly == "BULLISH":
         bullish_count += 1
-
     color = "green" if pct > 0 else "red"
     arrow = "▲" if pct > 0 else "▼"
-
     st.subheader(name)
     st.markdown(f"### ₹ {price:.2f}")
     st.markdown(f"<h4 style='color:{color};'>{arrow} {pct:.2f}%</h4>", unsafe_allow_html=True)
-
     col1, col2 = st.columns(2)
-
     with col1:
         st.write("📊 Daily Outlook:", daily)
         st.progress(float(prob1))
-
     with col2:
         st.write("📅 Weekly Outlook:", weekly)
         st.progress(float(prob5))
-
     plot_chart(data, name, projection)
     st.divider()
 
 st.header("📈 Overall Market Sentiment")
-
 if bullish_count >= 3:
     st.markdown("<h2 style='color:green;'>STRONG BULLISH</h2>", unsafe_allow_html=True)
 elif bullish_count >= 2:
