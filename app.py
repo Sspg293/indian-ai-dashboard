@@ -145,10 +145,6 @@ def plot_chart(data, name, projection):
 
 assets = {
     "NIFTY 50": "^NSEI",
-    "Nippon Gold ETF": "GOLDBEES.NS",
-    "Nippon Silver ETF": "SILVERBEES.NS",
-    "HDFC Gold ETF": "HDFCGOLD.NS",
-    "HDFC Silver ETF": "HDFCSILVER.NS",
     "Tata Gold ETF": "TATAGOLD.NS",
     "Tata Silver ETF": "TATSILV.NS"
 }
