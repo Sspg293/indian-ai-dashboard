@@ -1,3 +1,4 @@
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -5,16 +6,25 @@ import numpy as np
 import ta
 from xgboost import XGBClassifier
 import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
+import datetime
+import pytz
 
 st.set_page_config(page_title="Indian AI Market Dashboard", layout="centered")
 
 st.title("📊 Indian AI Market Dashboard")
-st.caption("Daily + Weekly AI Signals with 7-Day Projection")
+st.caption("Multi-Asset AI | Daily + Weekly | 7-Day Projection")
 
-# -------------------------------------------------
-# DATA + MODEL FUNCTION
-# -------------------------------------------------
-@st.cache_data
+# Auto refresh every 10 minutes
+st_autorefresh(interval=600000, key="refresh")
+
+def is_after_market_close():
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.datetime.now(ist)
+    market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
+    return now >= market_close
+
+@st.cache_data(ttl=86400 if is_after_market_close() else 600)
 def generate_signal(symbol):
 
     data = yf.download(symbol, start="2015-01-01", auto_adjust=True)
@@ -22,7 +32,6 @@ def generate_signal(symbol):
     if data.empty:
         return None
 
-    # Fix MultiIndex issue
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
 
@@ -30,7 +39,6 @@ def generate_signal(symbol):
     data = data.apply(pd.to_numeric, errors='coerce')
     data.dropna(inplace=True)
 
-    # Indicators
     data['MA20'] = data['Close'].rolling(20).mean()
     data['MA50'] = data['Close'].rolling(50).mean()
     data['RSI'] = ta.momentum.RSIIndicator(close=data['Close'], window=14).rsi()
@@ -43,10 +51,8 @@ def generate_signal(symbol):
     if len(data) < 200:
         return None
 
-    # Targets
     data['Target_1D'] = (data['Close'].shift(-1) > data['Close']).astype(int)
     data['Target_5D'] = (data['Close'].shift(-5) > data['Close']).astype(int)
-
     data.dropna(inplace=True)
 
     features = ['MA20','MA50','RSI','Return','Volatility']
@@ -98,16 +104,10 @@ def generate_signal(symbol):
 
     return data, price, pct, signal(prob1), prob1, signal(prob5), prob5
 
-
-# -------------------------------------------------
-# 7 DAY FORECAST FUNCTION
-# -------------------------------------------------
 def forecast_7_days(data, prob):
-
     last_price = float(data['Close'].iloc[-1])
     avg_vol = data['Return'].std()
-
-    bias = (prob - 0.5) * 2  # -1 to +1 range
+    bias = (prob - 0.5) * 2
 
     projected_prices = []
     price = last_price
@@ -119,10 +119,6 @@ def forecast_7_days(data, prob):
 
     return projected_prices
 
-
-# -------------------------------------------------
-# CHART FUNCTION
-# -------------------------------------------------
 def plot_chart(data, name, projection):
 
     recent = data.tail(120)
@@ -130,26 +126,10 @@ def plot_chart(data, name, projection):
 
     fig = go.Figure()
 
-    # Historical
-    fig.add_trace(go.Scatter(
-        x=recent.index,
-        y=recent['Close'],
-        name="Close"
-    ))
+    fig.add_trace(go.Scatter(x=recent.index, y=recent['Close'], name="Close"))
+    fig.add_trace(go.Scatter(x=recent.index, y=recent['MA20'], name="MA20"))
+    fig.add_trace(go.Scatter(x=recent.index, y=recent['MA50'], name="MA50"))
 
-    fig.add_trace(go.Scatter(
-        x=recent.index,
-        y=recent['MA20'],
-        name="MA20"
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=recent.index,
-        y=recent['MA50'],
-        name="MA50"
-    ))
-
-    # Projection
     future_dates = pd.date_range(start=last_date, periods=8, freq='B')[1:]
 
     fig.add_trace(go.Scatter(
@@ -159,23 +139,16 @@ def plot_chart(data, name, projection):
         line=dict(dash="dash")
     ))
 
-    fig.update_layout(
-        template="plotly_dark",
-        height=450,
-        margin=dict(l=10, r=10, t=30, b=10),
-        title=name
-    )
+    fig.update_layout(template="plotly_dark", height=450, title=name)
 
     st.plotly_chart(fig, use_container_width=True)
 
-
-# -------------------------------------------------
-# ASSETS
-# -------------------------------------------------
 assets = {
     "NIFTY 50": "^NSEI",
-    "Tata Gold ETF": "TATAGOLD.NS",
-    "Tata Silver ETF": "TATSILV.NS"
+    "Nippon Gold ETF": "GOLDBEES.NS",
+    "Nippon Silver ETF": "SILVERBEES.NS",
+    "HDFC Gold ETF": "HDFCGOLD.NS",
+    "HDFC Silver ETF": "HDFCSILVER.NS"
 }
 
 bullish_count = 0
@@ -189,7 +162,6 @@ for name, symbol in assets.items():
         continue
 
     data, price, pct, daily, prob1, weekly, prob5 = result
-
     projection = forecast_7_days(data, prob1)
 
     if weekly == "BULLISH":
@@ -213,18 +185,13 @@ for name, symbol in assets.items():
         st.progress(float(prob5))
 
     plot_chart(data, name, projection)
-
     st.divider()
 
-
-# -------------------------------------------------
-# OVERALL SENTIMENT
-# -------------------------------------------------
 st.header("📈 Overall Market Sentiment")
 
-if bullish_count >= 2:
-    st.markdown("<h2 style='color:green;'>BULLISH</h2>", unsafe_allow_html=True)
-elif bullish_count == 1:
-    st.markdown("<h2 style='color:orange;'>NEUTRAL</h2>", unsafe_allow_html=True)
+if bullish_count >= 3:
+    st.markdown("<h2 style='color:green;'>STRONG BULLISH</h2>", unsafe_allow_html=True)
+elif bullish_count >= 2:
+    st.markdown("<h2 style='color:orange;'>MODERATE BULLISH</h2>", unsafe_allow_html=True)
 else:
-    st.markdown("<h2 style='color:red;'>BEARISH</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='color:red;'>WEAK / BEARISH</h2>", unsafe_allow_html=True)
