@@ -174,8 +174,8 @@ def plot_chart(data, name, projection):
 # -------------------------------------------------
 assets = {
     "NIFTY 50": "^NSEI",
-    "Gold ETF": "GOLDBEES.NS",
-    "Silver ETF": "SILVERBEES.NS"
+    "Gold ETF": "TATAGOLD.NS",
+    "Silver ETF": "TATSILV.NS"
 }
 
 bullish_count = 0
